@@ -31,6 +31,7 @@ from .common import (
     flush_saves,
     normalize_to_u8,
     save_image,
+    slugify,
     upscale_to,
     write_metadata,
 )
@@ -283,6 +284,50 @@ def extract(input_path: Path, outdir: Path, exiftool: str | None = None,
         except Exception as exc:  # noqa: BLE001
             notes.append(f"HDR reconstruction failed: {exc}")
             LOG.warning("HDR reconstruction failed: %s", exc)
+
+    # --- other GContainer items (Depth / Confidence / MotionPhoto / ...) --- #
+    # Ultra HDR itself is just base + gain map, but the same Google container can
+    # also carry depth, confidence, or a motion-photo video (Pixel Portrait /
+    # Motion modes). Surface them as extra layers / files.
+    if hdrgm.gcontainer:
+        meta["gcontainer_items"] = []
+        try:
+            items = md.extract_gcontainer_items(data, hdrgm.gcontainer, streams[0][1])
+            n = 0
+            for it in items:
+                if it["semantic"] == "GainMap":
+                    continue  # already handled as 02/03/04 above
+                n += 1
+                rec = {"semantic": it["semantic"], "mime": it["mime"],
+                       "length": it["length"], "offset": it["offset"]}
+                name = f"aux_{n:03d}_{slugify(it['semantic'])}"
+                blob = it["data"]
+                is_image = it["mime"].startswith("image/") or blob[:3] in (b"\xff\xd8\xff", b"\x89PN")
+                try:
+                    if is_image:
+                        img = _decode_jpeg(blob)
+                        img.load()
+                        save_image(img if img.mode in ("L", "RGB", "RGBA") else img.convert("RGB"),
+                                   outdir, name)
+                        layers.append(name)
+                        rec["file"] = f"{name}.png"
+                        rec["size"] = list(img.size)
+                    else:  # non-image (e.g. video/mp4): write raw bytes
+                        ext = (it["mime"].split("/")[-1] or "bin").split(";")[0]
+                        path = outdir / f"{name}.{ext}"
+                        path.write_bytes(blob)
+                        rec["file"] = path.name
+                        notes.append(f"GContainer item '{it['semantic']}' "
+                                     f"({it['mime']}) saved raw -> {path.name}")
+                    LOG.info("GContainer item: %s (%s, %d bytes)",
+                             it["semantic"], it["mime"], it["length"])
+                except Exception as exc:  # noqa: BLE001
+                    rec["error"] = str(exc)
+                    notes.append(f"GContainer item '{it['semantic']}' failed: {exc}")
+                meta["gcontainer_items"].append(rec)
+        except Exception as exc:  # noqa: BLE001
+            notes.append(f"GContainer extraction failed: {exc}")
+            LOG.warning("GContainer extraction failed: %s", exc)
 
     # --- ExifTool full dump (optional) ------------------------------------- #
     if exiftool:

@@ -363,6 +363,45 @@ def merge_hdrgm(primary: HdrgmMeta, secondary: HdrgmMeta) -> HdrgmMeta:
     return out
 
 
+def extract_gcontainer_items(data: bytes, directory: list[dict[str, Any]],
+                             primary_end: int) -> list[dict[str, Any]]:
+    """Slice out every appended GContainer item (GainMap / Depth / Confidence /
+    MotionPhoto / ...) using the directory's sequential Length fields.
+
+    The Google container lays items out right after the primary image's EOI, in
+    directory order. The Primary entry has Length 0 (it *is* the front image), so
+    appended bytes start at *primary_end*; each subsequent item occupies its
+    declared Length (plus optional Padding).
+    """
+    out: list[dict[str, Any]] = []
+    offset = primary_end
+    n = len(data)
+    for entry in directory:
+        sem = (entry.get("Semantic") or "").strip()
+
+        def _int(key: str) -> int:
+            try:
+                return int(entry.get(key, 0) or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        length = _int("Length")
+        padding = _int("Padding")
+        if sem == "Primary" or length <= 0:
+            continue  # Primary occupies the front; zero-length items have no bytes
+        blob = data[offset:offset + length]
+        out.append({
+            "semantic": sem or "unknown",
+            "mime": entry.get("Mime", ""),
+            "length": length,
+            "offset": offset,
+            "truncated": len(blob) < length or offset >= n,
+            "data": blob,
+        })
+        offset += length + padding
+    return out
+
+
 def parse_hdrgm(xmp_packets: dict[str, str | None]) -> HdrgmMeta:
     """Parse hdrgm + GContainer metadata from the available XMP packets."""
     meta = HdrgmMeta()
