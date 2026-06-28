@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Tool output directories (one per processed file).
+# The negation keeps the GIMP plug-in folder, whose name also ends in "_layers".
+*_layers/
+!gimp/
+!gimp/gimp_open_hdr_aux_layers/
+
+# Personal / sample media — never commit real photos
+*.heic
+*.heif
+*.hif
+*.avif
+*.jpg
+*.jpeg
+*.jpe
+*.HEIC
+*.JPG
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

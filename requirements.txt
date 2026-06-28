@@ -1,0 +1,15 @@
+# Core (required) - install with: python -m pip install -r requirements.txt
+Pillow>=11.1
+numpy>=1.24
+lxml>=4.9
+
+# HEIC support (required for extract_heic_aux_layers.py).
+# Bundles libheif binaries, so no system libheif install is needed.
+pillow-heif>=1.4
+
+# Optional external tools (NOT pip-installable, detected at runtime if present):
+#   * ExifTool  - richer metadata dump + MPF-based gain map extraction.
+#                 Windows: winget install OliverBetz.ExifTool
+#                 macOS:   brew install exiftool
+#                 Linux:   apt install libimage-exiftool-perl
+#   If ExifTool is missing, the tools fall back to pure-Python parsing.
