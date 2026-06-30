@@ -1,3 +1,7 @@
+# Build output / bundled deps
+/dist/
+_vendor/
+
 # Python
 __pycache__/
 *.py[cod]

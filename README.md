@@ -113,15 +113,23 @@ GIMP's bundled Python cannot import Pillow / pillow-heif, so the plug-in **runs 
 in your system Python as a subprocess** and loads the resulting PNGs as layers.
 `metadata.json` is attached as an image parasite (`hdrextract-metadata`) + comment.
 
-**Install:**
-1. GIMP > **Edit > Preferences > Folders > Plug-ins**
-2. Add this repo's **`gimp` folder** (e.g. `C:\path\to\HDRExtract\gimp`)
+**Install — Option 1: drop-in package (recommended; no clone, no env vars):**
+1. Build it once: `python gimp/build_package.py` → `dist/gimp_open_hdr_aux_layers.zip`
+2. Extract the zip into a GIMP plug-ins search folder
+   (**Edit > Preferences > Folders > Plug-ins**)
 3. Restart GIMP → **File > Open HDR Aux Layers…** (or **Filters > HDR Aux Layers**)
 
-Works with the Microsoft Store build of GIMP too. If auto-detection fails, set
-`HDREXTRACT_PYTHON` (path to a python.exe with the deps) and/or `HDREXTRACT_HOME`
-(this repo). The plug-in puts the **primary on top** and scales every other layer to the
-primary resolution so they line up.
+The package bundles the `hdrextract` code, and on first run it installs its Python
+dependencies into a plugin-local `_vendor/` folder automatically — so the only
+requirement on the machine is a **Python 3 interpreter** (no repo clone, no
+`pip install`, no environment variables). Works with the Microsoft Store build of GIMP.
+
+**Install — Option 2: dev checkout:** add this repo's `gimp` folder as the plug-ins
+search folder instead, and restart GIMP.
+
+Optional overrides (rarely needed): `HDREXTRACT_PYTHON` (a specific python.exe) and
+`HDREXTRACT_HOME` (the code location). The plug-in puts the **primary on top** and scales
+every other layer to the primary resolution so they line up.
 
 ### How log boost works (Android & Apple, one model)
 
@@ -342,14 +350,19 @@ GIMP内Pythonは Pillow/pillow-heif を使えないため、**プラグインが
 サブプロセス実行**し、出力PNGをレイヤー化します。`metadata.json` は image parasite
 （`hdrextract-metadata`）＋コメントに格納。
 
-**導入:**
-1. GIMP > **Edit > Preferences > Folders > Plug-ins**
-2. このリポジトリの **`gimp` フォルダ**（例 `C:\path\to\HDRExtract\gimp`）を追加
+**導入 — 方法1: ワンパッケージ配置（推奨・クローン/環境変数 不要）:**
+1. 一度だけビルド: `python gimp/build_package.py` → `dist/gimp_open_hdr_aux_layers.zip`
+2. zip を GIMP のプラグイン検索フォルダ（**Edit > Preferences > Folders > Plug-ins**）に**展開**
 3. GIMP再起動 → **File > Open HDR Aux Layers…**（または **Filters > HDR Aux Layers**）
 
-Microsoft Store版GIMPでも動作。自動検出に失敗したら環境変数 `HDREXTRACT_PYTHON`
-（依存入りpython.exe）/ `HDREXTRACT_HOME`（本リポジトリ）を設定。**primaryを最上位**に置き、
-他レイヤーをprimary解像度へスケールして整列します。
+パッケージは `hdrextract` コードを同梱し、**初回起動時に依存(Pillow/numpy/lxml/pillow-heif)を
+プラグイン内 `_vendor/` へ自動pip install**します。必要なのは **Python 3 本体だけ**（リポジトリ
+クローン・手動 `pip install`・環境変数すべて不要）。Microsoft Store版GIMPでも動作。
+
+**導入 — 方法2: 開発用:** リポジトリの `gimp` フォルダを検索フォルダに追加して再起動。
+
+任意の上書き（通常不要）: `HDREXTRACT_PYTHON`（特定のpython.exe）/ `HDREXTRACT_HOME`
+（コードの場所）。**primaryを最上位**に置き、他レイヤーをprimary解像度へスケールして整列します。
 
 ### log boost の計算（Android/Apple 共通モデル）
 

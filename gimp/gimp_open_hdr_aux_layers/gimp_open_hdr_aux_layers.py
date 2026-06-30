@@ -34,22 +34,15 @@ JPEG_EXT = {".jpg", ".jpeg", ".jpe"}
 # --------------------------------------------------------------------------- #
 # Plain-Python orchestration (no GIMP API here, so it is unit-testable)
 # --------------------------------------------------------------------------- #
-def find_repo() -> Path | None:
-    """Locate the hdrextract repository (the one holding scripts/)."""
-    candidates = []
-    if os.environ.get("HDREXTRACT_HOME"):
-        candidates.append(Path(os.environ["HDREXTRACT_HOME"]))
-    # This plugin lives at <repo>/gimp/gimp_open_hdr_aux_layers/<this>.py
-    here = Path(__file__).resolve()
-    candidates.append(here.parents[2])
-    candidates.append(Path.home() / "HDREXTRACT")
-    for c in candidates:
-        if (c / "scripts" / "extract_heic_aux_layers.py").is_file():
-            return c
-    return None
+# This plug-in is self-contained: the hdrextract code is bundled next to it and
+# dependencies are installed into a plugin-local _vendor dir on first run, so a
+# drop-in deployment needs no repo clone and no environment variables.
+PLUGIN_DIR = Path(__file__).resolve().parent
+VENDOR_DIR = PLUGIN_DIR / "_vendor"            # auto-installed dependencies
+RUN_EXTRACT = PLUGIN_DIR / "_run_extract.py"   # subprocess entry point
 
-
-REQUIRED_MODULES = "import PIL, numpy, pillow_heif"
+DEPS = ["pillow", "numpy", "lxml", "pillow-heif"]
+DEP_IMPORTS = "import PIL, numpy, lxml, pillow_heif"
 
 
 def _clean_env() -> dict:
@@ -59,56 +52,80 @@ def _clean_env() -> dict:
             if k not in ("PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP")}
 
 
+def _no_window() -> dict:
+    return {"creationflags": 0x08000000} if os.name == "nt" else {}  # CREATE_NO_WINDOW
+
+
 def _python_has_deps(cmd: list[str]) -> bool:
-    """True if running *cmd* can import the hdrextract dependencies."""
+    """True if *cmd* can import the deps (checking the bundled _vendor dir too)."""
+    code = f"import sys; sys.path.insert(0, r'{VENDOR_DIR}'); {DEP_IMPORTS}"
     try:
-        kw = {"creationflags": 0x08000000} if os.name == "nt" else {}
-        r = subprocess.run([*cmd, "-c", REQUIRED_MODULES],
-                           capture_output=True, env=_clean_env(), timeout=40, **kw)
+        r = subprocess.run([*cmd, "-c", code], capture_output=True,
+                           env=_clean_env(), timeout=60, **_no_window())
         return r.returncode == 0
     except Exception:  # noqa: BLE001
         return False
 
 
-def find_python() -> list[str] | None:
-    """Find a system Python that actually has Pillow/numpy/pillow-heif.
+def _pip_install_vendor(cmd: list[str]) -> tuple[bool, str]:
+    """Install the dependencies into the plugin-local _vendor dir using *cmd*."""
+    try:
+        VENDOR_DIR.mkdir(parents=True, exist_ok=True)
+        r = subprocess.run(
+            [*cmd, "-m", "pip", "install", "--upgrade", "--target", str(VENDOR_DIR), *DEPS],
+            capture_output=True, text=True, env=_clean_env(), timeout=900, **_no_window())
+        return r.returncode == 0, (r.stdout or "") + (r.stderr or "")
+    except Exception as exc:  # noqa: BLE001
+        return False, str(exc)
 
-    GIMP's own bundled Python is usually first on PATH but lacks these, so we
-    *probe* each candidate by importing the modules and use the first that works.
-    """
-    candidates: list[list[str]] = []
-    env = os.environ.get("HDREXTRACT_PYTHON")
+
+def _python_candidates() -> list[list[str]]:
+    cands: list[list[str]] = []
+    env = os.environ.get("HDREXTRACT_PYTHON")  # optional override, not required
     if env and Path(env).exists():
-        candidates.append([env])
+        cands.append([env])
     local = os.environ.get("LOCALAPPDATA", "")
     for v in ("Python313", "Python312", "Python311", "Python310"):
         fb = Path(local) / "Programs" / "Python" / v / "python.exe"
         if fb.exists():
-            candidates.append([str(fb)])
+            cands.append([str(fb)])
     for name in ("python", "python3"):
         w = shutil.which(name)
         if w and "WindowsApps" not in w:   # skip the Store alias stub
-            candidates.append([w])
+            cands.append([w])
     py = shutil.which("py")
     if py:
-        candidates.append([py, "-3"])
-
+        cands.append([py, "-3"])
     seen, unique = set(), []
-    for c in candidates:
-        key = tuple(c)
-        if key not in seen:
-            seen.add(key)
+    for c in cands:
+        if tuple(c) not in seen:
+            seen.add(tuple(c))
             unique.append(c)
-    for c in unique:
+    return unique
+
+
+def find_python(allow_install: bool = True) -> tuple[list[str] | None, str]:
+    """Return (python_cmd, status). Probes for a Python that can import the deps
+    (natively or via the bundled _vendor dir); if none and *allow_install*, pip
+    installs them into _vendor on first run. No repo clone / env vars needed."""
+    candidates = _python_candidates()
+    if not candidates:
+        return None, "No system Python 3 found on this machine (install Python 3)."
+    for c in candidates:
         if _python_has_deps(c):
-            return c
-    return None
-
-
-def script_for(path: Path, repo: Path) -> Path:
-    ext = path.suffix.lower()
-    name = "extract_heic_aux_layers.py" if ext in HEIC_EXT else "extract_ultrahdr_layers.py"
-    return repo / "scripts" / name
+            return c, "ok"
+    if not allow_install:
+        return None, "No Python with the required packages."
+    last = ""
+    for c in candidates:
+        ok, log = _pip_install_vendor(c)
+        last = log
+        if ok and _python_has_deps(c):
+            return c, "installed"
+    return None, (
+        "Could not install dependencies automatically (offline / proxy?).\n"
+        f"Run once with any Python:\n  python -m pip install --target \"{VENDOR_DIR}\" "
+        f"{' '.join(DEPS)}\n\n{last[-500:]}")
 
 
 def layer_priority(fname: str) -> int:
@@ -131,17 +148,13 @@ def layer_priority(fname: str) -> int:
     return len(order)
 
 
-def run_extractor(python: list[str], script: Path, input_file: Path) -> tuple[int, str, Path]:
-    """Run the CLI extractor. Returns (returncode, combined_log, output_dir)."""
+def run_extractor(python: list[str], input_file: Path) -> tuple[int, str, Path]:
+    """Run the bundled extractor dispatcher. Returns (rc, combined_log, outdir)."""
     outdir = input_file.parent / f"{input_file.stem}_layers"
-    cmd = [*python, str(script), str(input_file), "-o", str(outdir), "-v"]
-    kwargs = {}
-    if os.name == "nt":
-        kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+    cmd = [*python, str(RUN_EXTRACT), str(input_file), "-o", str(outdir), "-v"]
     proc = subprocess.run(cmd, capture_output=True, text=True,
-                          env=_clean_env(), **kwargs)
-    log = (proc.stdout or "") + (proc.stderr or "")
-    return proc.returncode, log, outdir
+                          env=_clean_env(), **_no_window())
+    return proc.returncode, (proc.stdout or "") + (proc.stderr or ""), outdir
 
 
 # --------------------------------------------------------------------------- #
@@ -291,21 +304,21 @@ class HdrAuxLayers(Gimp.PlugIn):
         if not input_file.is_file():
             return self._fail(procedure, f"File not found: {input_file}")
 
-        repo = find_repo()
-        if repo is None:
+        if not RUN_EXTRACT.is_file():
             return self._fail(procedure,
-                              "Could not locate the hdrextract repository. "
-                              "Set the HDREXTRACT_HOME environment variable.")
-        python = find_python()
-        if python is None:
-            return self._fail(procedure,
-                              "Could not find a system Python with hdrextract "
-                              "dependencies. Set HDREXTRACT_PYTHON.")
-
-        script = script_for(input_file, repo)
-        Gimp.progress_init(f"Extracting layers from {input_file.name} ...")
+                              f"Plug-in package is incomplete: {RUN_EXTRACT.name} is "
+                              "missing next to the plug-in.")
+        Gimp.progress_init("Preparing HDRExtract (first run may install dependencies)…")
         try:
-            rc, log, outdir = run_extractor(python, script, input_file)
+            python, status = find_python()
+        finally:
+            Gimp.progress_end()
+        if python is None:
+            return self._fail(procedure, status)
+
+        Gimp.progress_init(f"Extracting layers from {input_file.name} …")
+        try:
+            rc, log, outdir = run_extractor(python, input_file)
         except Exception as exc:  # noqa: BLE001
             return self._fail(procedure, f"Extractor failed to launch: {exc}")
         finally:
